@@ -270,6 +270,49 @@ local function createHitboxForPlayers(players, sizeArg, Trans:number ?)
     end
 end
 
+-- Function to make player lay down flat (stiff)
+local function LayPlayerDown()
+    local character = rt:Character()
+    if not character then return end
+    
+    local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+    if not humanoidRootPart then return end
+    
+    -- Lay the player down flat (horizontal)
+    local currentPos = humanoidRootPart.Position
+    local currentCFrame = CFrame.new(currentPos)
+    -- Rotate 90 degrees on X axis to lay flat
+    character:PivotTo(currentCFrame * CFrame.Angles(math.rad(90), 0, 0))
+    
+    -- Make body parts stiff by disabling collisions and setting velocity to 0
+    for _, part in pairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.CanCollide = false
+            part.Velocity = Vector3.new(0, 0, 0)
+        end
+    end
+end
+
+-- Function to restore player stance
+local function RestorePlayerStance()
+    local character = rt:Character()
+    if not character then return end
+    
+    local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+    if not humanoidRootPart then return end
+    
+    -- Restore to upright position
+    local currentPos = humanoidRootPart.Position
+    character:PivotTo(CFrame.new(currentPos))
+    
+    -- Re-enable collisions
+    for _, part in pairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.CanCollide = true
+        end
+    end
+end
+
 ---------------------------------------ATUOFARM SECTION--------------------------------------
 local collectCoins
 local function AutoFarmCleanUp()
@@ -294,6 +337,9 @@ local function AutoFarmCleanUp()
     end
     rt.Disconnect(rt.Added)
     rt.Disconnect(rt.Removing)
+
+    -- Restore player stance
+    RestorePlayerStance()
 
     -- Notify and clean up
     Notif:Notify("Removing cached instances for AutoFarm", 1.5, "success")
@@ -379,6 +425,7 @@ local function populateOctree()
                 rt.octree:CreateNode(parentCoin.Position, parentCoin)
                 setupTouchTracking(parentCoin)
                 setupPositionTracking(parentCoin, parentCoin.Position.Y)
+                print("[LOG] Coin found at: " .. tostring(parentCoin.Position))
             end
         end
     end)
@@ -401,7 +448,9 @@ local function moveToPositionSlowly(targetPosition: Vector3, duration: number)
     while true do
         local elapsedTime = tick() - startTime
         local alpha = math.min(elapsedTime / duration, 1)
-        rt:Character():PivotTo(CFrame.new(startPosition:Lerp(targetPosition, alpha)))
+        -- Maintain laying down position while moving
+        local newCFrame = CFrame.new(startPosition:Lerp(targetPosition, alpha)) * CFrame.Angles(math.rad(90), 0, 0)
+        rt:Character():PivotTo(newCFrame)
 
         if alpha >= 1 then
             task.wait(0.2)
@@ -416,16 +465,26 @@ end
 collectCoins = function ()
     -- Ensure CoinContainer exists
     rt.coinContainer = rt:Map():FindFirstChild("CoinContainer")
+    if rt.coinContainer then
+        print("[LOG] Map found at: " .. tostring(rt.coinContainer.Parent.Name))
+    end
+    
     rt.waypoint = rt:Character():GetPivot()
     local check = rt:MainGUI():WaitForChild("Game").CoinBags.Container.SnowToken.CurrencyFrame.Icon.Coins
     local price = "40"
     if rt:IsElite() then price = "50" end
 
+    print("[LOG] Coin bag found. Max coins set to: " .. price)
+
     -- Populate Octree
     populateOctree()
     
+    -- Lay player down
+    LayPlayerDown()
+    
     while rt.AutoFarmOn do
         if check.Text == price then
+            print("[LOG] Coins MAX! Current coins: " .. check.Text)
             Notif:Notify("Full Bag", 2, "success")
             break
         end
@@ -452,7 +511,12 @@ collectCoins = function ()
         end
     end
 
+    -- Reset character after coins are max
+    print("[LOG] Resetting player character...")
+    rt.player.Character:FindFirstChildWhichIsA("Humanoid"):ChangeState(Enum.HumanoidStateType.Dead)
+    
     if rt.TpBackToStart then
+        task.wait(0.5) -- Wait for respawn
         rt:Character():PivotTo(rt.waypoint)
     end
     AutoFarmCleanUp()
@@ -959,7 +1023,7 @@ local function Fling (targetPlayer)
                 else
                     break
                 end
-            until basePart.Velocity.Magnitude > 500 or basePart.Parent ~= targetPlayer.Character or targetPlayer.Parent ~= rt.Players or not targetPlayer.Character == tCharacter or tHumanoid.Sit or humanoid.Health <= 0 or tick() > time + timeToWait
+            until basePart.Velocity.Magnitude > 500 or basePart.Parent ~= targetPlayer.Character or targetPlayer.Parent ~= rt.Players or not targetPlayer.Character == tCharacter or tHumanoid.Sit
         end
 
         workspace.FallenPartsDestroyHeight = 0 / 0
@@ -999,632 +1063,14 @@ local function Fling (targetPlayer)
             humanoid:ChangeState("GettingUp")
             for _, x in ipairs(character:GetChildren()) do
                 if x:IsA("BasePart") then
-                    x.Velocity, x.RotVelocity = Vector3.new(), Vector3.new()
+                    x.Velocity = Vector3.new(0, 0, 0)
                 end
             end
             task.wait()
-        until (rootPart.Position - getgenv().OldPos.p).Magnitude < 25
-        workspace.FallenPartsDestroyHeight = workspace.FallenPartsDestroyHeight
-        getgenv().OldPos = nil
-    else
-        Notif:Notify("Random error", 5, "error")
+        until (getgenv().OldPos.Position - rootPart.Position).Magnitude > 5
+
+        rt.flingActive = false
     end
 end
 
-local function ServerHop()
-    local PlaceId = game.PlaceId
-    local JobId = game.JobId
-
-    local servers = {}
-    local req = request({Url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100&excludeFullGames=true", PlaceId)})
-    local body = rt.HttpService:JSONDecode(req.Body)
-
-    if body and body.data then
-        for i, v in next, body.data do
-            if type(v) == "table" and tonumber(v.playing) and tonumber(v.maxPlayers) and v.playing < v.maxPlayers and v.id ~= JobId then
-                table.insert(servers, 1, v.id)
-            end
-        end
-    end
-
-    if #servers > 0 then
-        rt.TeleportService:TeleportToPlaceInstance(PlaceId, servers[math.random(1, #servers)], rt.player)
-    else
-        return Notif:Notify("Couldnt find a server", 1, "error")
-    end
-end
-
-local function RejoinServer()
-    local PlaceId = game.PlaceId
-    local JobId = game.JobId
-
-    if #rt.Players:GetPlayers() <= 1 then
-		rt.player:Kick("\nRejoining...")
-		task.wait()
-		rt.TeleportService:Teleport(PlaceId, rt.player)
-	else
-		rt.TeleportService:TeleportToPlaceInstance(PlaceId, JobId, rt.player)
-	end
-end
------------------------------------------IRIS SCRIPTS-----------------------------------------------------
-----------------------------------------------------------------------------------------------------------
-
-local function WayPointManager ()
-
-    local function helpMarker(helpText: string)
-        Iris.PushConfig({ TextColor = Iris._config.TextDisabledColor })
-        local text = Iris.Text({ "(?)" })
-        Iris.PopConfig()
-
-        Iris.PushConfig({ ContentWidth = UDim.new(0, 350) })
-        if text.hovered() then
-            Iris.Tooltip({ helpText })
-        end
-        Iris.PopConfig()
-    end
-
-    local function WaypointWindow()
-        Iris.Window({ "Waypoint Manager", [Iris.Args.Window.NoClose] = true })
-
-            -- Dropdown (tree) for waypoints
-            Iris.SameLine()
-                helpMarker("Double click to Teleport")
-                Iris.Tree({ "Waypoints" })
-                local waypointList = Iris.State({})
-                local sharedwaypoint = Iris.State(1)
-                local selectedWaypoint = Iris.State(0)
-                local inputtext = Iris.State("")
-                local waypointName = Iris.State("waypoint")
-
-                for i, waypoint in ipairs(waypointList:get()) do
-                    local item = Iris.Selectable({ waypoint, i }, { index = sharedwaypoint })
-
-                    if item.doubleClicked() then
-                        print("Waypoint double-clicked:", waypoint)
-                        -- Handle double-click logic
-                        for _, rtwaypoint in ipairs(rt.Settings.WayPoints) do
-                            if rtwaypoint.name == waypoint then
-                                rt:Character():PivotTo(rtwaypoint.waypoint)
-                                break
-                            end
-                        end
-                    end
-
-                    if item.selected() then
-                        selectedWaypoint:set(i)
-                    end
-                end
-                Iris.End() -- End Tree
-            Iris.End()
-            -- Separator
-            Iris.Separator()
-
-            -- Text Input and Help Marker
-            Iris.SameLine()
-
-            helpMarker("Not required but Recommended")
-            Iris.InputText({ "", "way point name" }, { text = inputtext })
-            
-            Iris.End()
-
-            -- Add Waypoint Button
-            if Iris.Button({ "Add Waypoint" }).clicked() then
-                local newWaypoint
-                local name = inputtext:get() ~= "" and inputtext:get() or waypointName:get() .. #waypointList:get() + 1
-                if inputtext:get() == "" then
-                    table.insert(waypointList:get(), name)
-                    sharedwaypoint:set(#waypointList:get())
-
-                    newWaypoint = { name = name, waypoint = rt:Character():GetPivot() }
-                    table.insert(rt.Settings.WayPoints, newWaypoint)
-                    inputtext:set("")
-                    return Iris.End()
-                end
-
-                table.insert(waypointList:get(), name)
-                sharedwaypoint:set(#waypointList:get())
-
-                newWaypoint = { name = name, waypoint = rt:Character():GetPivot() }
-                table.insert(rt.Settings.WayPoints, newWaypoint)
-                inputtext:set("")
-            end
-
-            -- Remove Selected Waypoint Button
-            if Iris.Button({ "Remove Selected" }).clicked() then
-                local selectedIndex = selectedWaypoint:get()
-                if selectedIndex ~= 0 then
-                    local selectedName = waypointList:get()[selectedIndex]
-
-                    -- Remove from waypointList
-                    local waypoints = waypointList:get()
-                    table.remove(waypoints, selectedIndex)
-                    waypointList:set(waypoints)
-
-                    -- Reset selection
-                    selectedWaypoint:set(0)
-
-                    -- Remove from rt.Settings.WayPoints
-                    for i, waypoint in ipairs(rt.Settings.WayPoints) do
-                        if waypoint.name == selectedName then
-                            table.remove(rt.Settings.WayPoints, i)
-                            break
-                        end
-                    end
-                end
-            end
-
-        Iris.End() -- End Window
-    end
-
-
-    Iris:Connect(WaypointWindow)
-
-end 
---------------------------------CONNECTIONS SECTION OF THE CODE---------------------------------
-------------------------------------------------------------------------------------------------
-
-if (rt:CheckForConnection()) then  
-    Notif:Notify("Cleaning Connections...", 1, "success")
-    rt.Disconnect(rt.RoleTracker1)
-    rt.Disconnect(rt.RoleTracker2)
-    rt:Disconnect(rt.viewChanged)
-    rt.Disconnect(rt.viewDiedFunc)
-    rt.Disconnect(rt.WeaponTracker1)
-    rt.Disconnect(rt.WeaponTracker2)
-    rt.Disconnect(rt.Joined)
-    rt.Disconnect(rt.Left)
-    rt.Disconnect(rt.UserDied)
-
-    for _, v in pairs(rt.playerESP) do
-        rt.Disconnect(v.connection1)
-        rt.Disconnect(v.connection2)
-        rt.Disconnect(v.connection3)
-    end
-
-    Notif:Notify("Cleaning Memory...", 1, "success")
-    rt.player:SetAttribute("Connection", nil)
-
-    -- if Esp is on while removing UI then we remove all ESP
-    if rt.espON then for _, v in (rt.Players:GetChildren()) do RemovePlayerESP(v) end end
-
-    rt = nil
-
-    Notif:Notify("Removing Instances...", 1, "success")
-
-    task.wait(0.5) -- add in before the scheduler
-
-    game:GetService("CoreGui"):FindFirstChild("watermark"):Destroy()
-    game:GetService("CoreGui"):FindFirstChild("Notifications"):Destroy()
-    game:GetService("CoreGui"):FindFirstChild("screen"):Destroy()
-end
-
--- Add ESP for players who join later
-rt.Joined = rt.Players.PlayerAdded:Connect(function(player)
-    if rt.espON then CreatePlayerESP(player) end
-end)
-
-rt.Left = rt.Players.PlayerRemoving:Connect(function(player)
-    if rt.espON then RemovePlayerESP(player) end
-end)
-
-rt.UserDied = rt.player.CharacterRemoving:Connect(function(character)
-    if coroutine.status(rt.start) == 'running' then
-        AutoFarmCleanUp()
-    end
-end)
-
-rt.player:SetAttribute("Connection", true)
 rt.start = coroutine.create(collectCoins)
-
---------------------------------UI SECTION OF THE CODE------------------------------------------
-------------------------------------------------------------------------------------------------
-
-
-library.title = "Zynic's MM2 HUB 🎄"
-if library.rank ~= "developer" then library:Introduction(); task.wait(1) end
-
-
-local Init = library:Init()
-local Tab1 = Init:NewTab("Home 🏠")
-local Tab2 = Init:NewTab("Auto Farm ♻️")
-local Tab3 = Init:NewTab("Actions 🔨")
-local Tab4 = Init:NewTab("Misc ⚙️")
-local Tab5 = Init:NewTab("Credits 🎉")
-
-------------------------------------HOME TAB--------------------------------------------------
-----------------------------------------------------------------------------------------------
-Tab1:NewSection("KeyBind Section")
-
-Tab1:NewKeybind("Hide Gui", Enum.KeyCode.RightAlt, function(key)
-    Init:UpdateKeybind(key)
-end)
-Tab1:NewLabel("", "center")
-
--------------------------------------------------------------------------------------------------
--------------------------------------------------------------------------------------------------
-Tab1:NewSection("Movement Section")
-
-Tab1:NewButton("Reset WalkSpeed", function()
-    local result = rt:ResetSpeed() -- reset speed
-    if result == false then Notif:Notify("WalkSpeed is already at default:", 1.5, "error") return end -- error handling
-
-    Notif:Notify("Reseted WalkSpeed to 16 ", 1, "success")
-    result = nil
-end)
-
-Tab1:NewButton("Increase WalkSpeed", function()
-    local result = rt:SpeedUp() -- reset speed
-    if result == false then Notif:Notify("WalkSpeed is at max", 1.5, "error") return end -- error handling
-
-    Notif:Notify("Increased WalkSpeed to: ".. rt:Character():FindFirstChildWhichIsA("Humanoid").WalkSpeed, 1, "success")
-    result = nil
-end)
-Tab1:NewLabel("this will up your walkspeed by 4 [28 is max]", "center")
-Tab1:NewLabel("", "center")
-
--------------------------------------------------------------------------------------------------
--------------------------------------------------------------------------------------------------
-Tab1:NewSection("Destory Section")
-
-local DestoryGui = Tab1:NewButton("Destroy gui", function()
-    --Add A function into the UI LIB to handle this and disconnect all connections within the UI
-    --Use schduler to handle the destruction of the UI
-
-    Notif:Notify("Cleaning Connections...", 1, "success")
-    AutoFarmCleanUp()
-    rt.Disconnect(rt.Added)
-    rt.Disconnect(rt.Removing)
-    rt.Disconnect(rt.RoleTracker1)
-    rt.Disconnect(rt.RoleTracker2)
-    rt:Disconnect(rt.viewChanged)
-    rt.Disconnect(rt.viewDiedFunc)
-    rt.Disconnect(rt.WeaponTracker1)
-    rt.Disconnect(rt.WeaponTracker2)
-    rt.Disconnect(rt.Joined)
-    rt.Disconnect(rt.Left)
-    rt.Disconnect(rt.UserDied)
-
-    for _, v in pairs(rt.playerESP) do
-        rt.Disconnect(v.connection1)
-        rt.Disconnect(v.connection2)
-        rt.Disconnect(v.connection3)
-    end
-
-    Notif:Notify("Cleaning Memory...", 1, "success")
-    rt.player:SetAttribute("Connection", nil)
-
-    -- if Esp is on while removing UI then we remove all ESP
-    if rt.espON then for _, v in (rt.Players:GetChildren()) do RemovePlayerESP(v) end end
-
-    rt = nil
-
-    Notif:Notify("Removing Instances...", 1, "success")
-
-    task.wait(0.5) -- add in before the scheduler
-
-    game:GetService("CoreGui"):FindFirstChild("watermark"):Destroy()
-    game:GetService("CoreGui"):FindFirstChild("Notifications"):Destroy()
-    game:GetService("CoreGui"):FindFirstChild("screen"):Destroy()
-end)
-Tab1:NewLabel("remove UI HUB and its CONNECTIONS", "center")
-
-------------------------------------AUTO FARM TAB--------------------------------------------------
----------------------------------------------------------------------------------------------------
-
-Tab2:NewSection("Zynic's Auto Farm Settings")
-
-Tab2:NewToggle("Uninterrupted Mode", rt.Uninterrupted, function(value)
-    local vers = value and "on" or "off"
-    rt.Uninterrupted = value
-    Notif:Notify("Uninterrupted Mode: " .. vers, 1, "success")
-end)
-Tab2:NewLabel("this will kill you before you start autofarm", "center")
-Tab2:NewLabel("", "center")
-
-Tab2:NewToggle("Set Return Point", rt.TpBackToStart, function(value)
-    local vers = value and "on" or "off"
-    rt.TpBackToStart = value
-    Notif:Notify("Return point: " .. vers, 1, "success")
-end)
-Tab2:NewLabel("this will return u to the point where u started the autofarm", "center")
-Tab2:NewLabel("", "center")
-
-Tab2:NewSlider("Radius", "", true, "/", {min = 50, max = rt.radius, default = 120}, function(value)
-    rt.radius = value
-end)
-Tab2:NewLabel("this will be how far in studs you can search for the closet token", "center")
-Tab2:NewLabel("", "center")
-rt.radius = 120
-
-Tab2:NewSlider("Tween Speed", "", true, "/", {min = 16, max = rt.walkspeed, default = 20}, function(value)
-    rt.walkspeed = value
-end)
-Tab2:NewLabel("speed at which you will move to a token", "center")
-Tab2:NewLabel("", "center")
-rt.walkspeed = 20
-
--------------------------------------------------------------------------------------------------
--------------------------------------------------------------------------------------------------
-Tab2:NewSection("Auto Farm Section")
-
-local AutoFarm 
-local AutoFarmValueChanged = false 
-AutoFarm = Tab2:NewToggle("Zynic AutoFarm", false, function(value)
-    local vers = value and "on" or "off"
-
-    if AutoFarmValueChanged then AutoFarmValueChanged = not AutoFarmValueChanged return end
-    if not ToggleAutoFarm(value) then AutoFarmValueChanged = true; AutoFarm:Set(false) end
-
-    
-    Notif:Notify("Zynic AutoFarm is now " .. vers, 1, "success")
-end)
-Tab2:NewLabel("this is the built in autofarm maybe by Zynic [Recommended]", "center")
-Tab2:NewLabel("", "center")
-
-
-------------------------------------ACTIONS TAB--------------------------------------------------
----------------------------------------------------------------------------------------------------
-
-Tab3:NewSection("Roles Section")
-Tab3:NewLabel("Murderer Info", "center")
-local MurdName = Tab3:NewLabel("Murderer Username:", "left")
-local MurdKnife = Tab3:NewLabel("Murderer Knife:", "left")
-local MurdKnifeEffect = Tab3:NewLabel("Murderer Knife Effect:", "left")
-local MurdPerk = Tab3:NewLabel("Murderer Perk:", "left")
-local Murdlvl = Tab3:NewLabel("Murderer Lvl:", "left")
-local MurdPres = Tab3:NewLabel("Murderer Prestige:", "left")
-local MurdXP = Tab3:NewLabel("Murderer XP:", "left")
-
-Tab3:NewLabel("Sheriff Info", "center")
-local SherName = Tab3:NewLabel("Sheriff Username:", "left")
-local SherGun = Tab3:NewLabel("Sheriff Gun:", "left")
-local Sherlvl = Tab3:NewLabel("Sheriff Lvl:", "left")
-local SherPres = Tab3:NewLabel("Sheriff Prestige:", "left")
-local SherXP = Tab3:NewLabel("Sheriff XP:", "left")
-Tab3:NewLabel("", "center")
-
-rt.refresh = function(val :string) if val  then Notif:Notify(val, 1.5, "alert") end  local roles = rt:GetRoles(); rt.LoadRoleInfo(roles, {MurdName = MurdName, MurdKnife = MurdKnife, MurdKnifeEffect = MurdKnifeEffect, MurdPerk = MurdPerk, Murdlvl = Murdlvl, MurdPres = MurdPres, MurdXP = MurdXP }, { SherName = SherName,  SherGun = SherGun,  Sherlvl = Sherlvl,  SherPres = SherPres, SherXP = SherXP } ) end
-
-rt.refresh("Init")
-task.wait(1)
-rt:UpdateRoles()
-rt:MonitorTools()
--------------------------------------------------------------------------------------------------
--------------------------------------------------------------------------------------------------
-
-Tab3:NewSection("Actions Settings")
-
-Tab3:NewToggle("Safe Gun Grab", false, function(value)
-    local vers = value and "on" or "off"
-    rt.Settings.Safe_Gun_Grab = value
-
-    Notif:Notify("Safe Gun Grab is now: " .. vers, 1, "success")
-    vers = nil
-end)
-Tab3:NewLabel("this will make sure you didnt die before getting gun", "center")
-Tab3:NewLabel("", "center")
-
-
--------------------------------------------------------------------------------------------------
--------------------------------------------------------------------------------------------------
-
-Tab3:NewSection("Actions Section")
-local spectateMurd 
-local spectateMurdValueChanged = false
-spectateMurd = Tab3:NewToggle("Spectate Murderer", false, function(value)
-    local vers = value and "on" or "off"
-
-    if spectateMurdValueChanged then spectateMurdValueChanged = not spectateMurdValueChanged return end
-    if not rt.Murderer then spectateMurdValueChanged = true; Notif:Notify("No Murderer To View", 1, "error") return spectateMurd:Set(false) end
-
-    if vers == "on" then
-        rt:ViewMurderer()
-    else
-        rt:UnViewMurderer()
-    end
-
-    Notif:Notify("Murderer Spectate Status: " .. vers, 1, "success")
-end)
-Tab3:NewLabel("", "center")
-
-Tab3:NewButton("Refresh Roles", function()
-    Notif:Notify("Refreshing Roles...", 1, "information")
-    rt.refresh("Refresh Roles Button -> Fire")
-
-    if rt.sheriff or rt.Murderer then
-        Notif:Notify("Found a role(s)", 1, "success") 
-    else
-        Notif:Notify("Did not find any roles", 1, "error")
-    end
-end)
-Tab3:NewLabel("This will refresh murderer n sheriff roles", "center")
-
-Tab3:NewButton("Get Gun", function()
-    if rt.AutoFarmOn then return Notif:Notify("Cannot do this while autofarm is on", 1, "error") end
-    rt:GetGun()
-end)
-
-Tab3:NewButton("Fling Murderer", function()
-    if rt.AutoFarmOn then return Notif:Notify("Cannot do this while autofarm is on", 1, "error") end
-    if not rt.Murderer then return Notif:Notify("There is no murderer", 1, "error") end
-    
-    Notif:Notify("Flinging Murderer...", 0.5, "information")
-
-    coroutine.wrap(Fling)(rt.Murderer)
-    if rt.flingActive == false then Notif:Notify("AdvanceFling is turned off", 1, "success") else Notif:Notify("AdvanceFling is turned on", 1, "success") end
-end)
-
-------------------------------------MISC TAB--------------------------------------------------
----------------------------------------------------------------------------------------------------
-
-Tab4:NewSection("WayPoints Section")
-local WayPointTable = Tab4:NewSelector("WayPoints Table", "Empty Table", rt.Settings.WayPoints, function(d)
-    rt.CurrentWayPointName = d
-    Notif:Notify("Selected: " .. d, 1, "success")
-end)
-Tab4:NewLabel("This waypoint table is buggy due to the UI LIB \n[use Iris WITH CAUTION]", "center")
-
-Tab4:NewKeybind("Set WayPoint", Enum.KeyCode.Backspace, function(key)
-    local name = #rt.Settings.WayPoints+1
-    local newWaypoint = {name = "waypoint"..tostring(name), waypoint = rt:Character():GetPivot() }
-    table.insert(rt.Settings.WayPoints, newWaypoint)
-
-    WayPointTable:AddOption(newWaypoint.name)
-
-    Notif:Notify("WayPoint has been Set", 1, "success")
-end)
-
-Tab4:NewKeybind("GoTo WayPoint", nil, function(key)
-    if rt.AutoFarmOn then return Notif:Notify("Cannot do this while autofarm is on", 1, "error") end
-    local pos = nil
-    for _, waypoint in ipairs(rt.Settings.WayPoints) do
-        if waypoint.name == rt.CurrentWayPointName then
-            pos = waypoint.waypoint
-            break
-        end
-    end
-
-    if not pos then return Notif:Notify("No WayPoint Selected", 1, "error") end
-    Notif:Notify("Going to WayPoint...", 1, "success")
-
-    rt:Character():PivotTo(pos) 
-end)
-Tab4:NewLabel("", "center")
-
-Tab4:NewButton("Remove WayPoint", function()
-    for i, v in ipairs(rt.Settings.WayPoints) do
-        if v.name == rt.CurrentWayPointName then
-            table.remove(rt.Settings.WayPoints, i)
-            WayPointTable:RemoveOption(rt.CurrentWayPointName)
-            break
-        end
-    end
-
-    Notif:Notify("WayPoint Removed", 1, "success")
-end)
-Tab4:NewLabel("", "center")
-
-Tab4:NewSection("Iris")
-Tab4:NewButton("Iris WayPointManager", function()
-    if rt.AutoFarmOn then return Notif:Notify("Cannot do this while autofarm is on", 1, "error") end
-    if rt.IWPM then return Notif:Notify("Iris is already loaded and cannot be removed until you leave", 2, "error") end
-
-    rt.IWPM = true
-    WayPointManager()
-    Notif:Notify("Iris WayPointManager Loaded", 1, "success")
-end)
-Tab4:NewLabel("[Recommended] Only issue is that its a 1 time use and will stay until u leave", "center")
-Tab4:NewLabel("", "center")
-
--------------------------------------------------------------------------------------------------
--------------------------------------------------------------------------------------------------
-
-Tab4:NewSection("HitBox Section")
-
-local hitbox
-hitbox = Tab4:NewTextbox("HitBox Size", "", "5", "all", "small", true, false, function(val)
-    if rt.AutoFarmOn then return Notif:Notify("Cannot do this while autofarm is on", 1, "error") end
-    local size = tonumber(val);
-    print(size)
-    --if size == 0 then return Notif:Notify("HitBox Size has been Reseted", 1, "success") end
-     if size == 0 then createHitboxForPlayers(rt.Players:GetChildren(), 0); hitbox:Input("") return Notif:Notify("HitBox Size has been Reseted", 1, "success") end
-   
-    if not size then return Notif:Notify("HitBox Size is invalid", 1, "error") end
-    -- if size == nil then hitbox:Input("") return Notif:Notify("HitBox Size is invalid", 1, "error") end
-
-    createHitboxForPlayers(rt.Players:GetChildren(), tonumber(size))
-    Notif:Notify("HitBox Size Set to: ".. val, 1, "success")
-    hitbox:Input("")
-end)
-Tab4:NewLabel("Default size is 1, Max size is 15, enter 0\nto Remove them", "center")
-Tab4:NewLabel("", "center")
-
--------------------------------------------------------------------------------------------------
--------------------------------------------------------------------------------------------------
-
-Tab4:NewSection("Other Stuff")
-
-Tab4:NewToggle("Save Settings", false, function(value)
-    local vers = value and "on" or "off"
-    Notif:Notify("Saving Settings...", 1, "success")
-end)
-Tab4:NewLabel("This will save your Auto Farm Settings, Actions Settings, WayPoints, and KeyBinds", "center")
-Tab4:NewLabel("", "center")
-
-Tab4:NewToggle("Esp", false, function(value)
-    local vers = value and "on" or "off"
-    Notif:Notify("Esp is now " .. vers, 1, "success")
-
-    if value then
-        -- loops thru all the players and creates ESP
-        rt.espON = value
-        for _, player in pairs(rt.Players:GetPlayers()) do if player ~= rt.player then CreatePlayerESP(player) end end
-    else
-        --loops thru all the players and removes ESP
-        rt.espON = value
-        for _, player in pairs(rt.Players:GetPlayers()) do if player ~= rt.player then RemovePlayerESP(player) end end
-    end
-end)
-Tab4:NewLabel("Uses My Custom Esp derived from Position Logger'", "left")
-Tab4:NewLabel("", "center")
-
-local teleportBox
-teleportBox = Tab4:NewTextbox("TP to plr", "", "user", "all", "small", true, false, function(val)
-    if rt.AutoFarmOn then return Notif:Notify("Cannot do this while autofarm is on", 1, "error") end
-    if val == "" then return Notif:Notify("Please provide a Plrs name or display name", 1, "error") end
-    local result = rt.FindPlayer(val)
-    if not result then return Notif:Notify("No such person: ".. val, 1, "error") end
-
-    Notif:Notify("Teleporting to: ".. val, 1, "success")
-    rt:Character():PivotTo(result.Character:GetPivot())
-
-    teleportBox:Input("")
-end):Place("username/display name")
-
-Tab4:NewLabel("just type in the first 3 letters of the user, 4 if someone else has the same first 3 letters", "center")
-Tab4:NewLabel("", "center")
-
-Tab4:NewButton("Tp to alive plr", function()
-    if rt.AutoFarmOn then return Notif:Notify("Cannot do this while autofarm is on", 1, "error") end
-    local AlivePlayers = rt:GetAlivePlayers()
-    if not AlivePlayers then return Notif:Notify("Game not in progress", 1, "error") end
-
-    local RandomPlr = AlivePlayers[math.random(1, #AlivePlayers)]
-    RandomPlr = RandomPlr ~= rt.player and RandomPlr or AlivePlayers[math.random(1, #AlivePlayers)] --looks confusing? ikr but it will make sure it doesn't give the current plr
-    Notif:Notify("Teleporting to: ".. RandomPlr.Name, 1, "success")
-
-    TeleportToPlayer(RandomPlr)
-end)
-Tab4:NewLabel("Teleport you to a plr still alive in the round", "center")
-
-Tab4:NewButton("Rejoin Server/Panic Button", function()
-    Notif:Notify("Running Panic...", 1, "success")
-    RejoinServer()
-end)
-Tab4:NewLabel("Lets say somehow u break the gui or jus want2 rejoin\nwell then, use this", "center")
-
-Tab4:NewButton("Server Hop", function()
-    Notif:Notify("Teleporting...", 1, "success")
-    ServerHop()
-end)
-
-------------------------------------CREDITS TAB--------------------------------------------------
----------------------------------------------------------------------------------------------------
-
-Tab5:NewSection("Creators:")
-Tab5:NewLabel("Zynic", "left")
-Tab5:NewLabel("", "center")
-
-Tab5:NewSection("Tools I used:", "left")
-Tab5:NewLabel("XSX UI Library", "left")
-Tab5:NewLabel("Octree", "left")
-Tab5:NewLabel("Infinite Yield", "left")
-Tab5:NewLabel("", "center")
-
-Tab5:NewSection("Special Thanks:", "left")
-Tab5:NewLabel("Infinite Yield & Dark Dex Devs", "left")
-Tab5:NewLabel("Swift Executor Devs", "left")
-
-
-Notif:Notify("Loaded zynic's mm2 hub", 2, "success")
-library:Watermark("xsx ui lib | v" .. library.version ..  " | " .. library:GetUsername() .. " | rank: " .. library.rank)
