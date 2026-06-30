@@ -1023,7 +1023,7 @@ local function Fling (targetPlayer)
                 else
                     break
                 end
-            until basePart.Velocity.Magnitude > 500 or basePart.Parent ~= targetPlayer.Character or targetPlayer.Parent ~= rt.Players or not targetPlayer.Character == tCharacter or tHumanoid.Sit
+            until basePart.Velocity.Magnitude > 500 or basePart.Parent ~= targetPlayer.Character or targetPlayer.Parent ~= rt.Players or not targetPlayer.Character == tCharacter or tHumanoid.Sit or humanoid.Health <= 0
         end
 
         workspace.FallenPartsDestroyHeight = 0 / 0
